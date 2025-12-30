@@ -1,0 +1,108 @@
+name: Auto Fetch File to Repository
+
+on:
+  # 手动触发
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: '要拉取的文件URL（可选）'
+        required: false
+        default: ''
+      file_name:
+        description: '保存的文件名（可选）'
+        required: false
+        default: 'worker.js'
+  
+  # 定时触发（可选，每天UTC 0点执行）
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # 推送代码时触发
+  push:
+    branches: [ main ]
+
+jobs:
+  fetch-file:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GH_PAT }}
+    
+    - name: 确定文件URL和名称
+      id: config
+      run: |
+        # 如果手动触发时有输入，使用输入的值
+        if [ -n "${{ github.event.inputs.file_url }}" ]; then
+          FILE_URL="${{ github.event.inputs.file_url }}"
+          FILE_NAME="${{ github.event.inputs.file_name }}"
+        else
+          # 否则使用仓库Secrets中的配置
+          FILE_URL="${{ secrets.FETCH_FILE_URL }}"
+          FILE_NAME="${{ secrets.FETCH_FILE_NAME }}"
+        fi
+        
+        # 设置默认值
+        if [ -z "$FILE_NAME" ]; then
+          FILE_NAME="worker.js"
+        fi
+        
+        echo "FILE_URL=${FILE_URL}" >> $GITHUB_OUTPUT
+        echo "FILE_NAME=${FILE_NAME}" >> $GITHUB_OUTPUT
+        echo "FILE_PATH=${FILE_NAME}" >> $GITHUB_OUTPUT
+    
+    - name: 从URL拉取文件
+      if: steps.config.outputs.FILE_URL != ''
+      run: |
+        echo "正在从 ${{ steps.config.outputs.FILE_URL }} 拉取文件..."
+        echo "保存为: ${{ steps.config.outputs.FILE_PATH }}"
+        
+        # 使用curl下载文件
+        curl -L -o "${{ steps.config.outputs.FILE_PATH }}" "${{ steps.config.outputs.FILE_URL }}"
+        
+        # 检查文件是否下载成功
+        if [ -f "${{ steps.config.outputs.FILE_PATH }}" ]; then
+          echo "✅ 文件下载成功"
+          echo "文件大小: $(wc -c < "${{ steps.config.outputs.FILE_PATH }}") bytes"
+          echo "文件内容预览:"
+          head -20 "${{ steps.config.outputs.FILE_PATH }}"
+        else
+          echo "❌ 文件下载失败"
+          exit 1
+        fi
+    
+    - name: 检查文件差异
+      id: diff
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        
+        # 检查是否有变更
+        if git diff --quiet "${{ steps.config.outputs.FILE_PATH }}" 2>/dev/null; then
+          echo "没有变更"
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+        else
+          echo "发现变更"
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+          
+          # 显示变更内容
+          echo "=== 变更内容 ==="
+          git diff "${{ steps.config.outputs.FILE_PATH }}" || echo "这是新文件"
+        fi
+    
+    - name: 提交变更
+      if: steps.diff.outputs.has_changes == 'true'
+      run: |
+        # 添加并提交文件
+        git add "${{ steps.config.outputs.FILE_PATH }}"
+        git commit -m "🔄 自动更新文件: ${{ steps.config.outputs.FILE_NAME }} [$(date +'%Y-%m-%d %H:%M:%S')]"
+        git push origin main
+        
+        echo "✅ 变更已提交到仓库"
+    
+    - name: 无变更通知
+      if: steps.diff.outputs.has_changes == 'false'
+      run: |
+        echo "✅ 文件无变更，无需提交"
