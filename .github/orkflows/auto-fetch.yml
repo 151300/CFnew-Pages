@@ -12,15 +12,15 @@ on:
         description: '保存路径（可选，默认worker.js）'
         required: false
         default: 'worker.js'
-  
+
   # 定时自动检查（每天UTC 8点运行，北京时间16点）
   schedule:
     - cron: '0 8 * * *'
-  
+
   # 推送触发（当配置更新时运行）
   push:
     paths:
-      - '.github/workflows/smart-fetch.yml'
+      - '.github/workflows/auto-fetch.yml'  # ✅ 修正为正确的文件名
       - 'fetch-config.json'
 
 jobs:
@@ -28,14 +28,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # 需要写入权限来提交文件
-    
+
     steps:
     - name: 1️⃣ 检出仓库
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         fetch-depth: 0  # 获取完整历史记录
-    
+
     - name: 2️⃣ 加载配置
       id: config
       run: |
@@ -133,10 +133,14 @@ jobs:
         fi
     
     - name: 5️⃣ 保存文件（仅在需要时）
+      id: save  # ✅ 添加id以便后续引用
       if: steps.compare.outputs.has_changes == 'true'
       run: |
         TARGET_PATH="${{ steps.config.outputs.target_path }}"
         CHANGE_TYPE="${{ steps.compare.outputs.change_type }}"
+        
+        # 确保目标目录存在
+        mkdir -p "$(dirname "$TARGET_PATH")"
         
         # 备份旧文件（如果存在）
         if [ -f "$TARGET_PATH" ]; then
@@ -190,8 +194,8 @@ jobs:
         # 添加文件
         git add "${{ steps.config.outputs.target_path }}"
         
-        # 提交
-        git commit -m "${{ steps.compare.outputs.commit_msg }}"
+        # 提交 - 使用save步骤的输出 ✅ 修正引用
+        git commit -m "${{ steps.save.outputs.commit_msg }}"
         
         # 推送
         git push origin main
@@ -208,11 +212,12 @@ jobs:
         echo "📊 文件大小: ${{ steps.fetch.outputs.file_size }} 字节"
         echo "📝 文件行数: ${{ steps.fetch.outputs.line_count }}"
         echo "🔐 内容哈希: ${{ steps.fetch.outputs.content_hash }}"
-        echo "🔄 变更状态: ${{ steps.compare.outputs.has_changes == 'true' && '有变更，已提交' || '无变更，已跳过' }}"
         
         if [ "${{ steps.compare.outputs.has_changes }}" = "true" ]; then
+          echo "🔄 变更状态: 有变更，已提交"
           echo "✅ 结果: 文件已更新并提交到仓库"
         else
+          echo "🔄 变更状态: 无变更，已跳过"
           echo "⏭️  结果: 文件无变化，跳过提交"
         fi
         echo "================================="
@@ -221,5 +226,8 @@ jobs:
       if: always()
       run: |
         # 清理临时文件
-        rm -f new_content.tmp
-        echo "🧹 临时文件已清理"
+        if [ -f "new_content.tmp" ]; then
+          rm -f new_content.tmp
+          echo "🧹 临时文件已清理"
+        fi
+        echo "🧹 工作流执行完毕"
